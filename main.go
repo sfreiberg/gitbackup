@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/google/go-github/github"
-	"gopkg.in/src-d/go-git.v4"
+	"github.com/go-git/go-git/v5"
+	"github.com/google/go-github/v93/github"
 )
 
 var (
@@ -63,8 +63,11 @@ func main() {
 }
 
 func githubRepos(user string) ([]*github.Repository, error) {
-	client := github.NewClient(nil)
-	repos, _, err := client.Repositories.List(context.Background(), user, nil)
+	client, err := github.NewClient()
+	if err != nil {
+		return nil, err
+	}
+	repos, _, err := client.Repositories.ListByUser(context.Background(), user, nil)
 
 	return repos, err
 }
