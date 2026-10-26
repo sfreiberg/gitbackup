@@ -23,16 +23,19 @@ var (
 	slackURL   = ""
 )
 
-func init() {
+func main() {
 	flag.StringVar(&path, "path", path, "path to store repos")
 	flag.StringVar(&githubUser, "github-user", githubUser, "github user to download repos")
 	flag.StringVar(&slackURL, "slack-url", slackURL, "Slack URL")
 	flag.Parse()
-}
 
-func main() {
+	client, err := github.NewClient()
+	if err != nil {
+		log.Fatalf("Error creating GitHub client: %s", err)
+	}
+
 	for {
-		repos, err := githubRepos(githubUser)
+		repos, err := githubRepos(context.Background(), client, githubUser)
 		if err != nil {
 			msg := fmt.Sprintf("Error getting repos for %s: %s\n", githubUser, err)
 			slack(msg, slackURL)
@@ -62,12 +65,8 @@ func main() {
 
 }
 
-func githubRepos(user string) ([]*github.Repository, error) {
-	client, err := github.NewClient()
-	if err != nil {
-		return nil, err
-	}
-	repos, _, err := client.Repositories.ListByUser(context.Background(), user, nil)
+func githubRepos(ctx context.Context, client *github.Client, user string) ([]*github.Repository, error) {
+	repos, _, err := client.Repositories.ListByUser(ctx, user, nil)
 
 	return repos, err
 }
