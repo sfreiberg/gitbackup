@@ -137,3 +137,32 @@ func TestGithubRepos(t *testing.T) {
 		t.Fatalf("unexpected repos: %v", repos)
 	}
 }
+
+func TestGithubReposPaginates(t *testing.T) {
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/octo/repos", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("page") == "2" {
+			w.Write([]byte(`[{"name": "page2"}]`))
+			return
+		}
+		w.Header().Set("Link", `<`+srv.URL+`/users/octo/repos?page=2>; rel="next"`)
+		w.Write([]byte(`[{"name": "page1"}]`))
+	})
+	srv = httptest.NewServer(mux)
+	defer srv.Close()
+
+	base := srv.URL + "/"
+	client, err := github.NewClient(github.WithURLs(&base, &base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repos, err := githubRepos(context.Background(), client, "octo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 2 || repos[1].GetName() != "page2" {
+		t.Fatalf("expected repos from both pages, got %v", repos)
+	}
+}
