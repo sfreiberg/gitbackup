@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/google/go-github/github"
-	"gopkg.in/src-d/go-git.v4"
+	"github.com/go-git/go-git/v5"
+	"github.com/google/go-github/v93/github"
 )
 
 var (
@@ -23,50 +23,66 @@ var (
 	slackURL   = ""
 )
 
-func init() {
+func main() {
 	flag.StringVar(&path, "path", path, "path to store repos")
 	flag.StringVar(&githubUser, "github-user", githubUser, "github user to download repos")
 	flag.StringVar(&slackURL, "slack-url", slackURL, "Slack URL")
 	flag.Parse()
-}
 
-func main() {
-	for {
-		repos, err := githubRepos(githubUser)
-		if err != nil {
-			msg := fmt.Sprintf("Error getting repos for %s: %s\n", githubUser, err)
-			slack(msg, slackURL)
-			return
-		}
-
-		for _, repo := range repos {
-			log.Printf("%s: %s\n", *repo.Name, *repo.CloneURL)
-
-			dir := filepath.Join(path, *repo.Name)
-
-			if repoExists(dir) {
-				if err = update(dir); err != nil {
-					msg := fmt.Sprintf("Error updating repo %s: %s", *repo.Name, err)
-					slack(msg, slackURL)
-				}
-			} else {
-				if err = clone(dir, *repo.CloneURL); err != nil {
-					msg := fmt.Sprintf("Error cloning repo %s: %s", *repo.Name, err)
-					slack(msg, slackURL)
-				}
-			}
-		}
-
-		time.Sleep(time.Hour * 24)
+	client, err := github.NewClient()
+	if err != nil {
+		log.Fatalf("Error creating GitHub client: %s", err)
 	}
 
+	for {
+		backupAll(context.Background(), client)
+		time.Sleep(time.Hour * 24)
+	}
 }
 
-func githubRepos(user string) ([]*github.Repository, error) {
-	client := github.NewClient(nil)
-	repos, _, err := client.Repositories.List(context.Background(), user, nil)
+// backupAll clones or updates every repository owned by githubUser. Errors
+// are reported and do not stop the remaining repositories (or later runs)
+// from being backed up.
+func backupAll(ctx context.Context, client *github.Client) {
+	repos, err := githubRepos(ctx, client, githubUser)
+	if err != nil {
+		msg := fmt.Sprintf("Error getting repos for %s: %s\n", githubUser, err)
+		slack(msg, slackURL)
+		return
+	}
 
-	return repos, err
+	for _, repo := range repos {
+		log.Printf("%s: %s\n", repo.GetName(), repo.GetCloneURL())
+
+		dir := filepath.Join(path, repo.GetName())
+
+		if repoExists(dir) {
+			if err = update(dir); err != nil {
+				msg := fmt.Sprintf("Error updating repo %s: %s", repo.GetName(), err)
+				slack(msg, slackURL)
+			}
+		} else {
+			if err = clone(dir, repo.GetCloneURL()); err != nil {
+				msg := fmt.Sprintf("Error cloning repo %s: %s", repo.GetName(), err)
+				slack(msg, slackURL)
+			}
+		}
+	}
+}
+
+// githubRepos returns all of user's repositories, following pagination.
+func githubRepos(ctx context.Context, client *github.Client, user string) ([]*github.Repository, error) {
+	opts := &github.RepositoryListByUserOptions{
+		ListOptions: github.ListOptions{PerPage: 100},
+	}
+	var repos []*github.Repository
+	for repo, err := range client.Repositories.ListByUserIter(ctx, user, opts) {
+		if err != nil {
+			return nil, err
+		}
+		repos = append(repos, repo)
+	}
+	return repos, nil
 }
 
 func update(dir string) error {
@@ -103,8 +119,10 @@ func repoExists(dir string) bool {
 	return !os.IsNotExist(err)
 }
 
+// slack logs update and, if url is set, posts it to that Slack webhook.
 func slack(update, url string) {
-	if url == "" { // if no url is supplied just return
+	log.Print(update)
+	if url == "" { // if no url is supplied there is nothing more to do
 		return
 	}
 
@@ -142,7 +160,9 @@ func slack(update, url string) {
 	}
 	defer resp.Body.Close()
 
-	return
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		log.Printf("Slack webhook returned unexpected status: %s\n", resp.Status)
+	}
 }
 
 // Attempts to get the current user. If it can't get the current user it returns an empty string.
